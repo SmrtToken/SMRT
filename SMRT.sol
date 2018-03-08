@@ -30,7 +30,7 @@ contract Ownable {
    */
   function transferOwnership(address newOwner) public onlyOwner {
     require(newOwner != address(0));
-    OwnershipTransferred(owner, newOwner);
+    emit OwnershipTransferred(owner, newOwner);
     owner = newOwner;
   }
 
@@ -97,7 +97,7 @@ contract Pausable is Ownable {
    */
   function pause() onlyOwner whenNotPaused public {
     paused = true;
-    Pause();
+    emit Pause();
   }
 
   /**
@@ -105,28 +105,10 @@ contract Pausable is Ownable {
    */
   function unpause() onlyOwner whenPaused public {
     paused = false;
-    Unpause();
+    emit  Unpause();
   }
 }
-/**
- * @title Destructible
- * @dev Base contract that can be destroyed by owner. All funds in contract will be sent to the owner.
- */
-contract Destructible is Ownable {
 
-  function Destructible() public payable { }
-
-  /**
-   * @dev Transfers the current balance to the owner and terminates the contract.
-   */
-  function destroy() onlyOwner public {
-    selfdestruct(owner);
-  }
-
-  function destroyAndSend(address _recipient) onlyOwner public {
-    selfdestruct(_recipient);
-  }
-}
 
 /**
  * @title ERC20Basic
@@ -145,38 +127,39 @@ contract ERC20Basic {
 contract BasicToken is ERC20Basic, Pausable {
   using SafeMath for uint256;
   mapping(address => uint256) balances;
-  mapping(address =>uint256) public business;
-  mapping(address=>uint256) public additional;
+  uint256 preICOReserveTokens;
+  uint256 icoReserveTokens;
+  uint256 bonusTokensLimit;
+  address preicodistributor;
+  address icodistributor;
+  address businessReserveAddress;
   uint256 public timeLock = 1523102399; //7 April 2018 locked
   
-  modifier checkAdditionalTokenLock (uint256 _value) {
-      if(now < timeLock){
-          if(msg.sender == owner){
-              _;
+  modifier checkAdditionalTokenLock() {
+     
+          if(msg.sender == businessReserveAddress){
+             if(now < timeLock){
+                 revert();
+             }else{
+                 _;
+             }
           }else{
-              uint256 remainingBal = balances[msg.sender]- _value;
-              if(remainingBal>=additional[msg.sender]){
-                  _;
-              }else{
-                  revert();
-              }
+            _;
           }
-      }else{
-          _;
-      }
+     
   }
   /**
   * @dev transfer token for a specified address
   * @param _to The address to transfer to.
   * @param _value The amount to be transferred.
   */
-  function transfer(address _to, uint256 _value) public   returns (bool) {
+  function transfer(address _to, uint256 _value) public  checkAdditionalTokenLock returns (bool) {
     require(_to != address(0));
     require(_value <= balances[msg.sender]);
     // SafeMath.sub will throw if there is not enough balance.
     balances[msg.sender] = balances[msg.sender].sub(_value);
     balances[_to] = balances[_to].add(_value);
-    Transfer(msg.sender, _to, _value);
+    emit Transfer(msg.sender, _to, _value);
     return true;
   }
 
@@ -203,7 +186,43 @@ contract ERC20 is ERC20Basic {
   event Approval(address indexed owner, address indexed spender, uint256 value);
 }
 
-contract StandardToken is ERC20, BasicToken {
+/**
+ * @title Burnable Token
+ * @dev Token that can be irreversibly burned (destroyed).
+ */
+contract BurnableToken is BasicToken {
+
+  event Burn(address indexed burner, uint256 value);
+
+  /**
+   * @dev Burns preico and ico amount of tokens.
+   * 
+   */
+  function burn() public {
+    if(msg.sender == preicodistributor){
+        uint256 _tokensToBurn = balanceOf(msg.sender);
+        uint256 totalSalePreICO = (preICOReserveTokens - _tokensToBurn) * 2;
+        uint256 tokensReserveForBusiness = (totalSalePreICO * 40) / 100;
+         balances[msg.sender] = balances[msg.sender].sub(_tokensToBurn);
+         balances[businessReserveAddress] = balances[businessReserveAddress].add(tokensReserveForBusiness);
+         totalSupply = totalSupply.sub(_tokensToBurn);
+          emit Burn(msg.sender, _tokensToBurn);
+        emit  Transfer(msg.sender, address(0), _tokensToBurn);
+    }else if (msg.sender == icodistributor){
+         _tokensToBurn = balanceOf(msg.sender);
+        uint256 totalSaleICO = (icoReserveTokens - _tokensToBurn) * 2;
+        tokensReserveForBusiness = (totalSaleICO * 40) / 100;
+        balances[msg.sender] = balances[msg.sender].sub(_tokensToBurn);
+        balances[businessReserveAddress] = balances[businessReserveAddress].add(tokensReserveForBusiness);
+        totalSupply = totalSupply.sub(_tokensToBurn);
+       emit Burn(msg.sender, _tokensToBurn);
+       emit  Transfer(msg.sender, address(0), _tokensToBurn);
+    }else{
+        revert();
+    }
+  }
+}
+contract StandardToken is ERC20, BurnableToken {
 
   mapping (address => mapping (address => uint256)) internal allowed;
 
@@ -215,7 +234,7 @@ contract StandardToken is ERC20, BasicToken {
    * @param _to address The address which you want to transfer to
    * @param _value uint256 the amount of tokens to be transferred
    */
-  function transferFrom(address _from, address _to, uint256 _value) public returns (bool) {
+  function transferFrom(address _from, address _to, uint256 _value) public checkAdditionalTokenLock returns (bool) {
     require(_to != address(0));
     require(_value <= balances[_from]);
     require(_value <= allowed[_from][msg.sender]);
@@ -223,7 +242,7 @@ contract StandardToken is ERC20, BasicToken {
     balances[_from] = balances[_from].sub(_value);
     balances[_to] = balances[_to].add(_value);
     allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
-    Transfer(_from, _to, _value);
+    emit Transfer(_from, _to, _value);
     return true;
   }
 
@@ -237,9 +256,9 @@ contract StandardToken is ERC20, BasicToken {
    * @param _spender The address which will spend the funds.
    * @param _value The amount of tokens to be spent.
    */
-  function approve(address _spender, uint256 _value) public returns (bool) {
+  function approve(address _spender, uint256 _value) public checkAdditionalTokenLock returns (bool) {
     allowed[msg.sender][_spender] = _value;
-    Approval(msg.sender, _spender, _value);
+    emit Approval(msg.sender, _spender, _value);
     return true;
   }
 
@@ -259,9 +278,9 @@ contract StandardToken is ERC20, BasicToken {
    * the first transaction is mined)
    * From MonolithDAO Token.sol
    */
-  function increaseApproval (address _spender, uint _addedValue) public returns (bool success) {
+  function increaseApproval (address _spender, uint _addedValue) public checkAdditionalTokenLock returns (bool success) {
     allowed[msg.sender][_spender] = allowed[msg.sender][_spender].add(_addedValue);
-    Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+    emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
     return true;
   }
 
@@ -272,86 +291,100 @@ contract StandardToken is ERC20, BasicToken {
     } else {
       allowed[msg.sender][_spender] = oldValue.sub(_subtractedValue);
     }
-    Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+    emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
     return true;
   }
 
 }
 
 
-contract SMRTCoin is StandardToken, Destructible {
+contract SMRTCoin is StandardToken {
     string public constant name = "SMRT";
     uint public constant decimals = 18;
     string public constant symbol = "SMRT";
      using SafeMath for uint256;
-     address depositWalletAddress;
      uint256 public weiRaised =0;
-    uint256 public timecheck;
-    uint256 public WEI_PER_ETH = uint256(1 ether) / 4620;
-    uint256 public icoStartTime;
-    uint256 hardCapTokens;
-    uint256 tokensUntilHardCap;
+     address depositWalletAddress;
+     event Buy(address _from,uint256 _ethInWei,string email);
+     uint256 startPreSale;
+     uint256 endPreSale;
+     uint256 startSale;
+     uint256 endSale;
     function SMRTCoin()  public {
-       totalSupply = 200000000 * (10**decimals);  
-       hardCapTokens = 100000000 * (10**decimals);  
        owner = msg.sender;
-       depositWalletAddress = owner; //TODO change with your multiseg or any account address where you want to receive balance
-       balances[msg.sender] += 200000000 * (10 ** decimals);
-       Transfer(msg.sender,msg.sender, balances[msg.sender]);
-       icoStartTime = now;  //1520640000   for live network time lock
-       tokensUntilHardCap = 0;
-       
+       totalSupply = 600000000 * (10**decimals);   
+       preICOReserveTokens = 90000000 * (10**decimals);   
+       icoReserveTokens =  210000000 * (10**decimals);  
+       bonusTokensLimit = 60000000 * (10**decimals);   
+       preicodistributor = 0x9c609bfbd0e12ed9f8b1162a7c0f8fdf7fe48e68; ///TODO change by admin
+       icodistributor = 0x5b162cee49e4bf42e8b1145a9c3792ca2fb7ec41 ;//TODO change by admin
+       depositWalletAddress= owner; //TODO change
+       businessReserveAddress = owner; //TODO change
+       balances[preicodistributor] = preICOReserveTokens;
+       balances[icodistributor] = icoReserveTokens;
+       emit Transfer(address(0),preicodistributor, preICOReserveTokens);
+       emit Transfer(address(0),icodistributor, icoReserveTokens);
+       startPreSale = now;//TODO update 1521900000 //24 march 14 00 00  UTC
+       endPreSale = 1524319200; //21 April 14 00 00 utc
+       startSale = endPreSale +1;
+       endSale = startSale + 30 days;
     }
 
-    function()  payable public {
-         require(msg.sender !=0x0);
+    function()   public {
+        revert();
+    }
+    /**
+     * This will be called by adding data to represnet data.
+     */ 
+    function buy(string email) public payable whenNotPaused{
          require(msg.value>0);
-        require(now>icoStartTime);
-         uint256 bonus = 0;
-         if(now < (icoStartTime + 7 days)){
-            bonus = 20;
-        }else if (now < (icoStartTime + 14 days)){
-            bonus = 10;
-        }else if (now < (icoStartTime + 21 days)){
-            bonus = 5;
-        } //end f else
-         uint256 tokensForAmount = (msg.value * (10 ** decimals)) / WEI_PER_ETH;
-         uint256 bonusTokens = ((tokensForAmount * bonus) /100); 
-         uint256 tokens =tokensForAmount + bonusTokens;
-         require((tokensUntilHardCap+tokens)<hardCapTokens);
+         require(msg.sender != address(0));
+          weiRaised += msg.value;
          forwardFunds();
-         uint256 businessTokens =  ((tokensForAmount * 20) /100); 
-         uint256 additionalToken = ((tokensForAmount * 30) /100); 
-        if(balances[owner] <tokens) //check etiher owner can have token otherwise reject transaction and ether
-         {
-          revert();
-         }
-        allowed[owner][msg.sender] += tokens;
-        bool transferRes=transferFrom(owner, msg.sender, tokens);
-        if (!transferRes) {
-            revert();
+         emit Buy(msg.sender,msg.value,email);
+    }
+    /**
+     * This function will called by only distributors to send tokens by calculating from offchain listners
+     */ 
+    function CrowdSale(address recieverAddress, uint256 tokens) public onlyDistributor {
+       require(now<=endSale);
+        uint bonus = 0;
+        if(now <= endPreSale){
+            bonus = 50;
+        }else if (now < startSale + 1 weeks ){
+             bonus = 10;
+        }else if (now < startSale + 2 weeks ){
+            bonus = 5; 
         }
-        else{
-            tokensUntilHardCap += tokens;
-            weiRaised += msg.value;
-            business[msg.sender]  = business[msg.sender].add(businessTokens);
-            additional[msg.sender] = additional[msg.sender].add(additionalToken);
-            balances[msg.sender] =balances[msg.sender].add(tokens);
-        }//end of else
-        
-        
-    }//end of fallback
-    
-  
-         // send ether to the fund collection wallet
-  // override to create custom fund forwarding mechanisms
-  function forwardFunds() internal {
-    depositWalletAddress.transfer(msg.value);
-  }
+        uint256 bonusTokens = (tokens * bonus) /100;
+        if(bonusTokensLimit>=bonusTokens){
+            tokens = tokens + bonusTokens;
+         }
+        transfer(recieverAddress,tokens);
+    }
+    /**
+   * @dev Determines how ETH is stored/forwarded on purchases.
+   */
+    function forwardFunds() internal {
+         depositWalletAddress.transfer(msg.value);
+     }
   function changeDepositWalletAddress (address newDepositWalletAddr) public onlyOwner {
        require(newDepositWalletAddr!=0);
        depositWalletAddress = newDepositWalletAddr;
   }
-    
+  function updateSaleTime (uint256 _startSale,uint256 _endSale) public onlyOwner{
+      startSale = _startSale;
+      endSale = _endSale;
+  }
   
+  /**
+   * to verify token distributor
+   */ 
+  modifier onlyDistributor () {
+      if(msg.sender == preicodistributor || msg.sender == icodistributor){
+          _;
+      }else{
+          revert();
+      }
+  }
 }

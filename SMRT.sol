@@ -320,7 +320,7 @@ contract SMRTCoin is StandardToken {
             bonusTokens = 0;
         }
     function CrowdSale(address recieverAddress, uint256 tokens)public onlyOwner {
-        uint256 businessTokens = (tokens * 2) / 100 * 40;
+        uint256 businessTokens = ((tokens.mul(2)).div(100)).mul(40);
         tokens += getBonustokens(tokens);
         if (now <= endPreSale && preICOReserveTokens >= tokens) {
             preICOReserveTokens = preICOReserveTokens.sub(tokens);

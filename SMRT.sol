@@ -1,4 +1,4 @@
-pragma solidity ^ 0.4 .18;
+pragma solidity ^ 0.4.19;
 /**
  * @title Ownable
  * @dev The Ownable contract has an owner address, and provides basic authorization control
@@ -62,10 +62,30 @@ library SafeMath {
     }
 }
 /**
+ * @title Destructible
+ * @dev Base contract that can be destroyed by owner. All funds in contract will be sent to the owner.
+ */
+contract Destructible is Ownable {
+
+  function Destructible() public payable { }
+
+  /**
+   * @dev Transfers the current balance to the owner and terminates the contract.
+   */
+  function destroy() onlyOwner public {
+    selfdestruct(owner);
+  }
+
+  function destroyAndSend(address _recipient) onlyOwner public {
+    selfdestruct(_recipient);
+  }
+}
+
+/**
  * @title Pausable
  * @dev Base contract which allows children to implement an emergency stop mechanism.
  */
-contract Pausable is Ownable {
+contract Pausable is Destructible {
     event Pause();
     event Unpause();
     bool public paused = false;
@@ -98,6 +118,7 @@ contract Pausable is Ownable {
         emit Unpause();
     }
 }
+
 /**
  * @title ERC20Basic
  * @dev Simpler version of ERC20 interface
@@ -115,12 +136,16 @@ contract ERC20Basic {
  */
 contract BasicToken is ERC20Basic,
 Pausable {
-    using SafeMath for uint256; mapping(address => uint256)balances; uint256 preICOReserveTokens; uint256 icoReserveTokens; uint256 bonusTokensLimit; address businessReserveAddress; uint256 public timeLock = 1586217600; //7 April 2020 locked
-
-    modifier checkAdditionalTokenLock() {
+    uint256 startPreSale; uint256 endPreSale; uint256 startSale; 
+    uint256 endSale; 
+    using SafeMath for uint256; mapping(address => uint256)balances; uint256 preICOReserveTokens; uint256 icoReserveTokens; 
+    address businessReserveAddress; uint256 public timeLock = 1586217600; //7 April 2020 locked
+    uint256 public incentiveTokensLimit;
+    modifier checkAdditionalTokenLock(uint256 value) {
 
         if (msg.sender == businessReserveAddress) {
-            if (now < timeLock) {
+            
+            if ((now<endSale) ||(now < timeLock &&value>incentiveTokensLimit)) {
                 revert();
             } else {
                 _;
@@ -130,12 +155,23 @@ Pausable {
         }
 
     }
+    
+    function updateTimeLock(uint256 _timeLock) external onlyOwner {
+        timeLock = _timeLock;
+    }
+    function updateBusinessReserveAddress(address _businessAddress) external onlyOwner {
+        businessReserveAddress =_businessAddress;
+    }
+    
+    function updateIncentiveTokenLimit(uint256 _incentiveTokens) external onlyOwner {
+      incentiveTokensLimit = _incentiveTokens;
+   }    
     /**
  * @dev transfer token for a specified address
  * @param _to The address to transfer to.
  * @param _value The amount to be transferred.
  */
-    function transfer(address _to, uint256 _value)public checkAdditionalTokenLock returns(
+    function transfer(address _to, uint256 _value)public whenNotPaused checkAdditionalTokenLock(_value) returns(
         bool
     ) {
         require(_to != address(0));
@@ -202,7 +238,7 @@ contract StandardToken is ERC20,BurnableToken {
   * @param _to address The address which you want to transfer to
   * @param _value uint256 the amount of tokens to be transferred
   */
-    function transferFrom(address _from, address _to, uint256 _value)public checkAdditionalTokenLock returns(
+    function transferFrom(address _from, address _to, uint256 _value)public whenNotPaused checkAdditionalTokenLock(_value) returns(
         bool) {
         require(_to != address(0));
         require(_value <= balances[_from]);
@@ -223,7 +259,7 @@ contract StandardToken is ERC20,BurnableToken {
   * @param _spender The address which will spend the funds.
   * @param _value The amount of tokens to be spent.
   */
-    function approve(address _spender, uint256 _value)public checkAdditionalTokenLock returns(
+    function approve(address _spender, uint256 _value)public checkAdditionalTokenLock(_value) returns(
         bool
     ) {
         allowed[msg.sender][_spender] = _value;
@@ -247,7 +283,7 @@ contract StandardToken is ERC20,BurnableToken {
   * the first transaction is mined)
   * From MonolithDAO Token.sol
   */
-    function increaseApproval(address _spender, uint _addedValue)public checkAdditionalTokenLock returns(
+    function increaseApproval(address _spender, uint _addedValue)public checkAdditionalTokenLock(_addedValue) returns(
         bool success
     ) {
         allowed[msg.sender][_spender] = allowed[msg.sender][_spender].add(_addedValue);
@@ -271,14 +307,16 @@ contract SMRTCoin is StandardToken {
     string public constant name = "SMRT";
     uint public constant decimals = 18;
     string public constant symbol = "SMRT";
-    using SafeMath for uint256; uint256 public weiRaised = 0; address depositWalletAddress; event Buy(address _from, uint256 _ethInWei, string userId); uint256 startPreSale; uint256 endPreSale; uint256 startSale; uint256 endSale; function SMRTCoin()public {
+    using SafeMath for uint256; uint256 public weiRaised = 0; address depositWalletAddress; 
+    event Buy(address _from, uint256 _ethInWei, string userId); 
+    
+    function SMRTCoin()public {
         owner = msg.sender;
         totalSupply = 600000000 * (10 ** decimals);
         preICOReserveTokens = 90000000 * (10 ** decimals);
         icoReserveTokens = 210000000 * (10 ** decimals);
-        bonusTokensLimit = 60000000 * (10 ** decimals);
         depositWalletAddress = owner; //TODO change
-        businessReserveAddress = 0x9c609bfbd0e12ed9f8b1162a7c0f8fdf7fe48e68; //TODO change
+        businessReserveAddress = 0xBfe30a97F7F73362A2d23E073220126B00E4b039; //TODO change
         balances[owner] = totalSupply;
         emit Transfer(address(0), owner, totalSupply);
         startPreSale = now; //TODO update 1521900000 24 march 14 00 00 UTC
@@ -314,21 +352,18 @@ contract SMRTCoin is StandardToken {
         }
 
         bonusTokens = ((tokens / 100) * bonus);
-        if (bonusTokensLimit >= bonusTokens) 
-            bonusTokensLimit = bonusTokensLimit.sub(tokens);
-        else 
-            bonusTokens = 0;
-        }
+    }
     function CrowdSale(address recieverAddress, uint256 tokens)public onlyOwner {
-        uint256 businessTokens = ((tokens.mul(2)).div(100)).mul(40);
-        tokens += getBonustokens(tokens);
+        tokens =  tokens.add(getBonustokens(tokens));
+        uint256 tokenLimit = (tokens.mul(20)).div(100); //as 20 becuase its 10 percnet of total
+        incentiveTokensLimit  = incentiveTokensLimit.add(tokenLimit);
         if (now <= endPreSale && preICOReserveTokens >= tokens) {
             preICOReserveTokens = preICOReserveTokens.sub(tokens);
-            transfer(businessReserveAddress, businessTokens);
+            transfer(businessReserveAddress, tokens);
             transfer(recieverAddress, tokens);
         } else if (now < endSale && icoReserveTokens >= tokens) {
             icoReserveTokens = icoReserveTokens.sub(tokens);
-            transfer(businessReserveAddress, businessTokens);
+            transfer(businessReserveAddress, tokens);
             transfer(recieverAddress, tokens);
         }
         else{ 
@@ -341,11 +376,11 @@ contract SMRTCoin is StandardToken {
     function forwardFunds()internal {
         depositWalletAddress.transfer(msg.value);
     }
-    function changeDepositWalletAddress(address newDepositWalletAddr)public onlyOwner {
+    function changeDepositWalletAddress(address newDepositWalletAddr)external onlyOwner {
         require(newDepositWalletAddr != 0);
         depositWalletAddress = newDepositWalletAddr;
     }
-    function updateSaleTime(uint256 _startSale, uint256 _endSale)public onlyOwner {
+    function updateSaleTime(uint256 _startSale, uint256 _endSale)external onlyOwner {
         startSale = _startSale;
         endSale = _endSale;
     }
